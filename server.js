@@ -1,11 +1,11 @@
-// index.js
-
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 app.use(express.json());
+app.use(cors()); // ✅ CORS ochiq
 
 // 🔹 Xotira uchun Map obyektlari
 const userStore = new Map(); // phone => chatId
@@ -49,9 +49,9 @@ bot.on('message', (msg) => {
         userStore.set(formattedPhone, chatId);
 
         bot.sendMessage(chatId, `✅ Raqamingiz (${formattedPhone}) saqlandi!`);
-        console.log(`✔️ Saqlandi: ${formattedPhone} => ${chatId}`);
+        console.log(`✔️ [${new Date().toLocaleTimeString()}] Saqlandi: ${formattedPhone} => ${chatId}`);
     } else if (msg.text) {
-        console.log("📩 Yangi xabar:", msg.text);
+        console.log(`📩 [${new Date().toLocaleTimeString()}] Xabar: ${msg.text}`);
     }
 });
 
@@ -60,7 +60,7 @@ app.post('/send-otp', async (req, res) => {
     const { phone } = req.body;
     const chatId = userStore.get(phone);
 
-    console.log("🔔 OTP so‘rovi:", phone);
+    console.log(`🔔 OTP so‘rovi: ${phone}`);
 
     if (!chatId) {
         return res.json({ success: false, error: "❌ Bu raqam Telegram botda ro'yxatdan o'tmagan." });
@@ -69,9 +69,12 @@ app.post('/send-otp', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     otps.set(phone, otp);
 
+    // (Ixtiyoriy): Bu yerda timeout o‘rnatib, 5 daqiqada OTP ni o‘chirishni qilishingiz mumkin
+    // setTimeout(() => otps.delete(phone), 5 * 60 * 1000);
+
     try {
         await bot.sendMessage(chatId, `🔐 Sizning OTP kodingiz: *${otp}*`, { parse_mode: "Markdown" });
-        console.log(`✅ OTP yuborildi: ${phone} -> ${otp}`);
+        console.log(`✅ [${new Date().toLocaleTimeString()}] OTP yuborildi: ${phone} -> ${otp}`);
         res.json({ success: true });
     } catch (err) {
         console.error("❌ Telegramga yuborilmadi:", err.message);
@@ -84,7 +87,7 @@ app.post('/verify-otp', (req, res) => {
     const { phone, otp } = req.body;
     const storedOtp = otps.get(phone);
 
-    console.log(`🔍 OTP tekshirish: ${phone} -> ${otp} (kutilyotgan: ${storedOtp})`);
+    console.log(`🔍 OTP tekshirilmoqda: ${phone} -> ${otp} (kutilmoqda: ${storedOtp})`);
 
     if (storedOtp && storedOtp === otp) {
         otps.delete(phone);
@@ -100,7 +103,7 @@ app.post('/check-user', (req, res) => {
     if (!phone) return res.status(400).json({ success: false, error: "Telefon raqam kerak" });
 
     const formattedPhone = "+" + phone.replace(/\D/g, '');
-    console.log("🔍 Tekshirilmoqda:", formattedPhone);
+    console.log(`🔍 Foydalanuvchi tekshirilmoqda: ${formattedPhone}`);
 
     if (userStore.has(formattedPhone)) {
         return res.json({ exists: true });
