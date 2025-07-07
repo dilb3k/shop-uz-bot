@@ -1,119 +1,120 @@
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
-
+const express = require('express');
+const bodyParser = require('body-parser');
 const app = express();
-app.use(express.json());
-app.use(cors()); // ✅ CORS ochiq
 
-// 🔹 Xotira uchun Map obyektlari
-const userStore = new Map(); // phone => chatId
-const otps = new Map();      // phone => otp
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT;
+const PORT = process.env.PORT || 5000;
 
-// 🔹 Telegram botni ishga tushurish
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-if (!TOKEN) {
-    console.error('❌ TELEGRAM_BOT_TOKEN topilmadi');
-    process.exit(1);
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+
+// In-memory storage for demo purposes (use a database in production)
+const userData = new Map(); // chatId -> {phone, otp}
+const phoneToChatId = new Map(); // phone -> chatId
+
+// Generate random 4-digit OTP
+
+function generateOTP() {
+    return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+// Set up Express server
+app.use(bodyParser.json());
 
-// 🔸 /start komandasi
-bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    const opts = {
-        reply_markup: {
-            keyboard: [[{ text: "📲 Telefon raqamni yuborish", request_contact: true }]],
-            resize_keyboard: true,
-            one_time_keyboard: true,
-        },
-    };
-    bot.sendMessage(chatId, "📱 Telefon raqamingizni yuboring:", opts);
-});
-
-// 🔸 Telefon raqamni qabul qilish
-bot.on('message', (msg) => {
-    const chatId = msg.chat.id;
-
-    if (msg.contact && msg.contact.phone_number) {
-        let phone = msg.contact.phone_number;
-        if (!phone.startsWith('+')) {
-            phone = '+998' + phone.slice(-9); // Faqat O‘zbek raqamlar uchun
-        }
-
-        const digits = phone.replace(/\D/g, '');
-        const formattedPhone = `+${digits}`;
-
-        userStore.set(formattedPhone, chatId);
-
-        bot.sendMessage(chatId, `✅ Raqamingiz (${formattedPhone}) saqlandi!`);
-        console.log(`✔️ [${new Date().toLocaleTimeString()}] Saqlandi: ${formattedPhone} => ${chatId}`);
-    } else if (msg.text) {
-        console.log(`📩 [${new Date().toLocaleTimeString()}] Xabar: ${msg.text}`);
-    }
-});
-
-// 🔹 OTP yuborish
-app.post('/send-otp', async (req, res) => {
+// Endpoint to request OTP
+app.post('/request-otp', (req, res) => {
     const { phone } = req.body;
-    const chatId = userStore.get(phone);
 
-    console.log(`🔔 OTP so‘rovi: ${phone}`);
+    if (!phone) {
+        return res.status(400).json({ success: false, error: "Phone number is required" });
+    }
+
+    // Check if we have a chatId for this phone
+    const chatId = phoneToChatId.get(phone);
 
     if (!chatId) {
-        return res.json({ success: false, error: "❌ Bu raqam Telegram botda ro'yxatdan o'tmagan." });
+        return res.status(400).json({
+            success: false,
+            error: "Please start the bot and provide your phone number first"
+        });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otps.set(phone, otp);
+    // Generate and store OTP
+    const otp = generateOTP();
+    userData.set(chatId, { phone, otp });
 
-    // (Ixtiyoriy): Bu yerda timeout o‘rnatib, 5 daqiqada OTP ni o‘chirishni qilishingiz mumkin
-    // setTimeout(() => otps.delete(phone), 5 * 60 * 1000);
+    // Send OTP via Telegram
+    bot.sendMessage(chatId, `Your verification code is: ${otp}`);
 
-    try {
-        await bot.sendMessage(chatId, `🔐 Sizning OTP kodingiz: *${otp}*`, { parse_mode: "Markdown" });
-        console.log(`✅ [${new Date().toLocaleTimeString()}] OTP yuborildi: ${phone} -> ${otp}`);
-        res.json({ success: true });
-    } catch (err) {
-        console.error("❌ Telegramga yuborilmadi:", err.message);
-        res.json({ success: false, error: "Telegramga yuborilmadi" });
-    }
+    res.json({ success: true });
 });
 
-// 🔹 OTP tekshirish
+// Endpoint to verify OTP
 app.post('/verify-otp', (req, res) => {
     const { phone, otp } = req.body;
-    const storedOtp = otps.get(phone);
 
-    console.log(`🔍 OTP tekshirilmoqda: ${phone} -> ${otp} (kutilmoqda: ${storedOtp})`);
+    if (!phone || !otp) {
+        return res.status(400).json({ success: false, error: "Phone and OTP are required" });
+    }
 
-    if (storedOtp && storedOtp === otp) {
-        otps.delete(phone);
+    const chatId = phoneToChatId.get(phone);
+
+    if (!chatId || !userData.has(chatId)) {
+        return res.status(400).json({ success: false, error: "Invalid phone number" });
+    }
+
+    const user = userData.get(chatId);
+
+    if (user.otp === otp) {
+        userData.delete(chatId); // Clear OTP after successful verification
         return res.json({ success: true });
-    }
-
-    res.json({ success: false, error: "❌ Noto‘g‘ri OTP kod" });
-});
-
-// 🔹 Raqam mavjudligini tekshirish
-app.post('/check-user', (req, res) => {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ success: false, error: "Telefon raqam kerak" });
-
-    const formattedPhone = "+" + phone.replace(/\D/g, '');
-    console.log(`🔍 Foydalanuvchi tekshirilmoqda: ${formattedPhone}`);
-
-    if (userStore.has(formattedPhone)) {
-        return res.json({ exists: true });
     } else {
-        return res.status(404).json({ success: false, error: "❌ Bu raqam Telegram botda ro'yxatdan o'tmagan." });
+        return res.json({ success: false, error: "Invalid OTP" });
     }
 });
 
-// 🔸 Serverni ishga tushurish
-const PORT = process.env.PORT || 5000;
+// Telegram bot commands
+bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(
+        chatId,
+        'Welcome! Please share your phone number using the button below to register.',
+        {
+            reply_markup: {
+                keyboard: [[{
+                    text: 'Share Phone Number',
+                    request_contact: true
+                }]],
+                one_time_keyboard: true,
+                resize_keyboard: true
+            }
+        }
+    );
+});
+
+// Handle phone number sharing
+bot.on('contact', (msg) => {
+    const chatId = msg.chat.id;
+    const phone = msg.contact.phone_number;
+
+    if (!phone) {
+        return bot.sendMessage(chatId, 'Please share a valid phone number.');
+    }
+
+    // Store the phone number and chatId
+    phoneToChatId.set(phone, chatId);
+    userData.set(chatId, { phone });
+
+    bot.sendMessage(
+        chatId,
+        `Thank you! Your phone number ${phone} has been registered. You can now proceed with OTP verification on the website.`,
+        { reply_markup: { remove_keyboard: true } }
+    );
+});
+
+// Start server
 app.listen(PORT, () => {
-    console.log(`🚀 Server ishga tushdi: http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Bot is listening...`);
 });
